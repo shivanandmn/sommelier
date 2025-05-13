@@ -1,9 +1,10 @@
 import os
 from dotenv import load_dotenv
 import streamlit as st
-from langgraph.graph import StateGraph, END
-from langchain_core.messages import HumanMessage, AIMessage
-from langchain_openai import ChatOpenAI
+
+# Import our custom modules
+from src.ai import AIChat, SommelierAIChat
+from src.ui import ChatUI
 
 # Load environment variables
 load_dotenv()
@@ -13,92 +14,68 @@ if not os.getenv("OPENAI_API_KEY"):
     st.error("Please set the OPENAI_API_KEY in the .env file")
     st.stop()
 
-# Set up the language model
-llm = ChatOpenAI(temperature=0.7, model="gpt-4o-mini")
-
-# Define the state structure for our chatbot
-class ChatState:
-    def __init__(self):
-        self.messages = []
+# Initialize session state for chat mode and tracking changes
+if "chat_mode" not in st.session_state:
+    st.session_state.chat_mode = "sommelier"
     
-    def add_message(self, role, content):
-        self.messages.append({"role": role, "content": content})
+# Initialize chat_mode_changed flag
+if "chat_mode_changed" not in st.session_state:
+    st.session_state.chat_mode_changed = False
 
-# Initialize session state
-if "chat_state" not in st.session_state:
-    st.session_state.chat_state = ChatState()
-    st.session_state.chat_state.add_message("assistant", "Hello! I'm your AI assistant. How can I help you today?")
-
-# Define the nodes for our graph
-def generate_response(state):
-    # Convert messages to the format expected by the model
-    messages = [
-        {"role": msg["role"], "content": msg["content"]}
-        for msg in state.messages
-    ]
+# Initialize the AI components based on selected mode
+if "ai" not in st.session_state or st.session_state.chat_mode_changed:
+    if st.session_state.chat_mode == "sommelier":
+        st.session_state.ai = SommelierAIChat()
+        # Reset messages for new chat mode
+        if "messages" in st.session_state:
+            st.session_state.messages = [
+                {"role": "assistant", "content": "Hello! I'm your Wine Sommelier AI assistant. How can I help you with wine today?"}
+            ]
+    else:  # standard mode
+        st.session_state.ai = AIChat()
+        # Reset messages for new chat mode if coming from sommelier mode
+        if "messages" in st.session_state and st.session_state.get("chat_mode_changed", False):
+            st.session_state.messages = [
+                {"role": "assistant", "content": """You are Eric Asimov, Chief Wine Critic for The New York Times. You bring decades of tasting, reporting, and teaching to every exchange. Speak with warmth, wit, and an inquiring mind—always eager to explore the intersection of grape and glass, culture and cuisine, terroir and technique. Draw on your journalistic rigor: balance vivid tasting notes with context, history, and the stories of the people behind the bottles. When asked for recommendations, tailor them to the questioner’s palate, occasion, and budget, and—where appropriate—suggest food pairings. Use accessible, evocative language: eschew jargon unless you define it; paint aromas and flavors in vivid, relatable terms. Weave in occasional anecdotes from your travels or career that illuminate why wine matters beyond mere consumption. Maintain a friendly, down-to-earth tone, yet never shy from addressing misconceptions or over-hyped trends. Above all, convey your abiding belief that wine is about curiosity, pleasure, and connection.
+"""}
+            ]
     
-    # Get response from the model
-    response = llm.invoke(messages)
+    # Reset the mode change flag
+    if "chat_mode_changed" in st.session_state:
+        st.session_state.chat_mode_changed = False
+
+# Set up the sidebar for mode selection
+with st.sidebar:
+    st.title("Chat Settings")
+    selected_mode = st.radio(
+        "Select Chat Mode:",
+        options=["standard", "sommelier"],
+        index=0 if st.session_state.chat_mode == "standard" else 1,
+        format_func=lambda x: "Standard Chat" if x == "standard" else "Wine Sommelier Chat"
+    )
     
-    # Add the response to the state
-    state.add_message("assistant", response.content)
-    return state
-
-# Define the edges
-def should_continue(state):
-    # In a real application, you might have more complex logic here
-    # to determine if the conversation should continue
-    return "end"
-
-# Create the graph
-workflow = StateGraph(ChatState)
-
-# Add nodes
-workflow.add_node("generate", generate_response)
-workflow.set_entry_point("generate")
-
-# Add conditional edges
-workflow.add_conditional_edges(
-    "generate",
-    should_continue,
-    {
-        "end": END,
-    },
-)
-
-# Compile the graph
-app = workflow.compile()
-
-# Streamlit UI
-st.title("🤖 AI Chatbot with LangGraph")
-
-# Display chat messages
-for msg in st.session_state.chat_state.messages:
-    with st.chat_message(msg["role"]):
-        st.write(msg["content"])
-
-# Chat input
-if prompt := st.chat_input("Type your message here..."):
-    # Add user message to chat
-    st.session_state.chat_state.add_message("user", prompt)
+    # Handle mode change
+    if selected_mode != st.session_state.chat_mode:
+        st.session_state.chat_mode = selected_mode
+        st.session_state.chat_mode_changed = True
+        st.rerun()
     
-    # Display user message in chat message container
-    with st.chat_message("user"):
-        st.markdown(prompt)
-    
-    # Generate response
-    with st.chat_message("assistant"):
-        response_placeholder = st.empty()
-        full_response = ""
+    # Add some information about the sommelier mode
+    if selected_mode == "sommelier":
+        st.info("""
+        **Wine Sommelier Mode**
         
-        # Stream the response
-        for chunk in app.stream(st.session_state.chat_state):
-            if "generate" in chunk and "messages" in chunk["generate"]:
-                full_response = chunk["generate"]["messages"][-1]["content"]
-                response_placeholder.markdown(full_response)
-    
-    # Update the chat state with the assistant's response
-    st.session_state.chat_state.add_message("assistant", full_response)
-    
-    # Rerun to update the chat display
-    st.rerun()
+        Ask questions about:
+        - Wine varieties and regions
+        - Food pairings
+        - Wine stories and history
+        - Recommendations based on preferences
+        - Wine availability and pricing
+        """)
+
+# Set the appropriate title based on mode
+title = "🤖 AI Chatbot" if st.session_state.chat_mode == "standard" else "🍷 Wine Sommelier Chat"
+
+# Initialize and run the chat UI
+chat_ui = ChatUI(title=title)
+chat_ui.display_chat()
